@@ -4,24 +4,46 @@ using ProvaPub.Repository;
 
 namespace ProvaPub.Services
 {
-	public class RandomService
+	public interface IRandomService
 	{
-		int seed;
-        TestDbContext _ctx;
-		public RandomService()
-        {
-            var contextOptions = new DbContextOptionsBuilder<TestDbContext>()
-    .UseSqlServer(@"Server=(localdb)\mssqllocaldb;Database=Teste;Trusted_Connection=True;")
-    .Options;
-            seed = Guid.NewGuid().GetHashCode();
+		Task<int> GetRandom();
+	}
 
-            _ctx = new TestDbContext(contextOptions);
+	public class RandomService : IRandomService
+	{
+        private readonly TestDbContext _ctx;
+        
+		public RandomService(TestDbContext ctx)
+        {
+            _ctx = ctx;
         }
         public async Task<int> GetRandom()
 		{
-            var number =  new Random(seed).Next(100);
+            int number;
+            bool isUnique = false;
+            int attempts = 0;
+            const int maxAttempts = 1000;
+
+            do
+            {
+                number = new Random().Next(100);
+                
+                var existingNumber = await _ctx.Numbers.FirstOrDefaultAsync(n => n.Number == number);
+                if (existingNumber == null)
+                {
+                    isUnique = true;
+                }
+                
+                attempts++;
+                if (attempts >= maxAttempts)
+                {
+                    throw new InvalidOperationException("Não foi possível gerar um número único após várias tentativas");
+                }
+            }
+            while (!isUnique);
+
             _ctx.Numbers.Add(new RandomNumber() { Number = number });
-            _ctx.SaveChanges();
+            await _ctx.SaveChangesAsync();
 			return number;
 		}
 

@@ -4,18 +4,44 @@ using ProvaPub.Repository;
 
 namespace ProvaPub.Services
 {
-    public class CustomerService
+    public interface ICustomerService
     {
-        TestDbContext _ctx;
+        CustomerList ListCustomers(int page);
+        Task<bool> CanPurchase(int customerId, decimal purchaseValue);
+    }
 
-        public CustomerService(TestDbContext ctx)
+    public class CustomerService : BaseService<Customer>, ICustomerService
+    {
+        private readonly IDateTimeProvider _dateTimeProvider;
+
+        public CustomerService(TestDbContext ctx, IDateTimeProvider dateTimeProvider) : base(ctx)
         {
-            _ctx = ctx;
+            _dateTimeProvider = dateTimeProvider;
         }
 
         public CustomerList ListCustomers(int page)
         {
-            return new CustomerList() { HasNext = false, TotalCount = 10, Customers = _ctx.Customers.ToList() };
+            var pagedResult = GetPagedList(_ctx.Customers.Include(c => c.Orders), page);
+            
+            // Converter timezone das orders para UTC-3 (horário brasileiro)
+            var brazilTimeZone = TimeZoneInfo.FindSystemTimeZoneById("E. South America Standard Time");
+            foreach (var customer in pagedResult.Items)
+            {
+                if (customer.Orders != null)
+                {
+                    foreach (var order in customer.Orders)
+                    {
+                        order.OrderDate = TimeZoneInfo.ConvertTimeFromUtc(order.OrderDate, brazilTimeZone);
+                    }
+                }
+            }
+            
+            return new CustomerList() 
+            { 
+                HasNext = pagedResult.HasNext, 
+                TotalCount = pagedResult.TotalCount, 
+                Customers = pagedResult.Items 
+            };
         }
 
         public async Task<bool> CanPurchase(int customerId, decimal purchaseValue)
@@ -29,7 +55,7 @@ namespace ProvaPub.Services
             if (customer == null) throw new InvalidOperationException($"Customer Id {customerId} does not exists");
 
             //Business Rule: A customer can purchase only a single time per month
-            var baseDate = DateTime.UtcNow.AddMonths(-1);
+            var baseDate = _dateTimeProvider.UtcNow.AddMonths(-1);
             var ordersInThisMonth = await _ctx.Orders.CountAsync(s => s.CustomerId == customerId && s.OrderDate >= baseDate);
             if (ordersInThisMonth > 0)
                 return false;
@@ -40,11 +66,17 @@ namespace ProvaPub.Services
                 return false;
 
             //Business Rule: A customer can purchases only during business hours and working days
-            if (DateTime.UtcNow.Hour < 8 || DateTime.UtcNow.Hour > 18 || DateTime.UtcNow.DayOfWeek == DayOfWeek.Saturday || DateTime.UtcNow.DayOfWeek == DayOfWeek.Sunday)
+            if (!IsBusinessHours(_dateTimeProvider.UtcNow))
                 return false;
 
-
             return true;
+        }
+
+        private bool IsBusinessHours(DateTime utcTime)
+        {
+            return utcTime.Hour >= 8 && utcTime.Hour <= 18 && 
+                   utcTime.DayOfWeek != DayOfWeek.Saturday && 
+                   utcTime.DayOfWeek != DayOfWeek.Sunday;
         }
 
     }
